@@ -14,7 +14,7 @@ namespace Marionette
         private readonly Quaternion finalOrientation;
         public double AVE_SPEED = 200; // Average velocity used to calculate trajectories (mm/s)
         private TimeSpan trajectoryTime;
-        private bool isActive;
+        private bool isActive; // bool to kno is movine
         private Stopwatch elapsedTime;
 
         /// <summary>
