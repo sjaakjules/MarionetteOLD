@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using MathNet.Numerics.LinearAlgebra;
 
@@ -12,7 +13,9 @@ namespace Marionette
         private List<double[,]> quinticParameters;
         private readonly Quaternion finalOrientation;
         public double AVE_SPEED = 200; // Average velocity used to calculate trajectories (mm/s)
-        private double trajectoryTime;
+        private TimeSpan trajectoryTime;
+        private bool isActive;
+        private Stopwatch elapsedTime;
 
         /// <summary>
         /// Overloaded constructor for various poses
@@ -20,13 +23,37 @@ namespace Marionette
         /// Set up variables, quaternion for slerp and time from cardinal distance
         /// Populate quintinParameters with x y z quintic curves where each entry in the list is the next point
         /// </summary>
-        public Trajectory(double[] poses)
+        public Trajectory(double[] pose)
         {
             
-            finalOrientation = MakeQuaternion(poses);
-            double distance = Math.Sqrt(Math.Pow(poses[0] - PosCard[0], 2) + Math.Pow(poses[1] - PosCard[1], 2) + Math.Pow(poses[2] - PosCard[2], 2));
-            trajectoryTime = distance / AVE_SPEED;
+            finalOrientation = MakeQuaternion(pose);
+            double distance = Math.Sqrt(Math.Pow(pose[0] - PosCard[0], 2) + Math.Pow(pose[1] - PosCard[1], 2) + Math.Pow(pose[2] - PosCard[2], 2));
+            trajectoryTime = new TimeSpan(0, 0, 0, 0, Convert.ToInt32(1000 * 1.2 * (distance / AVE_SPEED)));
 
+        }
+
+        /// <summary>
+        /// Controls when the trajectory begins moving
+        /// </summary>
+        public Boolean IsActive
+        {
+            get
+            {
+                return isActive;
+            }
+            set
+            {
+                if (!isActive & value)
+                {
+                    isActive = value;
+                    elapsedTime.Start();
+                }
+                else if (isActive & !value)
+                {
+                    isActive = value;
+                    elapsedTime.Stop();
+                }
+            }
         }
 
         /// <summary>
@@ -34,7 +61,17 @@ namespace Marionette
         /// </summary>
         public double RefPos()
         {
-            throw new System.NotImplementedException();
+            if (elapsedTime.ElapsedMilliseconds > trajectoryTime.Milliseconds)
+            {
+                return -1;
+            }
+            else
+                return quinticParameters[0][0, 0] +
+                    quinticParameters[0][1, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 1) +
+                    quinticParameters[0][2, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 2) +
+                    quinticParameters[0][3, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 3) + 
+                    quinticParameters[0][4, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 4) + 
+                    quinticParameters[0][5, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 5);
         }
 
         /// <summary>
@@ -42,7 +79,16 @@ namespace Marionette
         /// </summary>
         public double RefVel()
         {
-            throw new System.NotImplementedException();
+            if (elapsedTime.ElapsedMilliseconds > trajectoryTime.Milliseconds)
+            {
+                return -1;
+            }
+            else
+                return quinticParameters[0][1, 0] +
+                    2 * quinticParameters[0][2, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 1) + 
+                    3 * quinticParameters[0][3, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 2) + 
+                    4 * quinticParameters[0][4, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 3) + 
+                    5 * quinticParameters[0][5, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 4);
         }
 
         /// <summary>
@@ -50,19 +96,36 @@ namespace Marionette
         /// </summary>
         public double RefAcc()
         {
-            throw new System.NotImplementedException();
+            if (elapsedTime.ElapsedMilliseconds > trajectoryTime.Milliseconds)
+            {
+                return -1;
+            }
+            else
+                return 2 * quinticParameters[0][2, 0] + 
+                    6 * quinticParameters[0][3, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 1) + 
+                    12 * quinticParameters[0][4, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 2) + 
+                    20 * quinticParameters[0][5, 0] * Math.Pow(elapsedTime.ElapsedMilliseconds, 3);
         }
 
         /// <summary>
-        /// Finds the coefficients to describe a quintic path from current position, velocity and acceleration
+        /// Given a pose it calculates the quintic coefficients conserving the current position and velocity
+        /// It assumes zero initial time, zero final velocity and when half the time has elapsed it is hafway  with the average velocity
         /// </summary>
         private void FindQuintic(double[] poses)
         {
-            double t0 = PosCard[1];
-            
+            Matrix<double> tempQuinticParam = Matrix<double>.Build.Dense(6, 3);
+            for (int i = 0; i < 3; i++)
+            {                
+                tempQuinticParam.SetColumn(i, FindCurve(0, trajectoryTime.Milliseconds, PosCard[i], poses[i], VelCard[i], 0)); // magic numbers are zero start time and zero final velocity
+            }
+            quinticParameters.Add(tempQuinticParam.ToArray());
         }
 
-        private void FindCurve(double t0, double tf, double x0, double xf, double v0, double vf)
+        /// <summary>
+        /// Finds the coefficients to describe a quintic path using start and final time, position and velocity
+        /// It assumes when half the time has elapsed it is hafway and with the average velocity
+        /// </summary>
+        private Vector<double> FindCurve(double t0, double tf, double x0, double xf, double v0, double vf)
         {
             double tm = (tf - t0) / 2;
             Matrix<Double> A = Matrix<Double>.Build.DenseOfArray(new double[,] {{1,  t0  ,Math.Pow(t0,2),Math.Pow(t0,3)  , Math.Pow(t0,4)  , Math.Pow(t0,5)  },  // start position
@@ -76,7 +139,9 @@ namespace Marionette
                                                                                 {x0+(xf-x0)/2},                 // mid position (half way)
                                                                                 {xf},                           // final position
                                                                                 {vf},                           // final velocity
-                                                                                {(xf-x0)/(0.6*(tf-t0))}});      // mid velocity (60% of average velocity)
+                                                                                {AVE_SPEED}});                   // mid velocity 
+            Matrix<Double> X = A.Solve(Y);
+            return X.Column(0);
         }
 
         
